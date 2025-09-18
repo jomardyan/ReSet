@@ -5,10 +5,18 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms.DataVisualization
 
-# Import configuration module
+# Import configuration module with enhanced error handling
 $ModulePath = Join-Path $PSScriptRoot "GUIConfig.psm1"
-if (Test-Path $ModulePath) {
-    Import-Module $ModulePath -Force
+try {
+    if (Test-Path $ModulePath) {
+        Import-Module $ModulePath -Force -ErrorAction Stop
+        Write-Verbose "Successfully loaded GUIConfig module"
+    } else {
+        Write-Warning "GUIConfig module not found at: $ModulePath"
+    }
+} catch {
+    Write-Error "Failed to load GUIConfig module: $($_.Exception.Message)"
+    # Continue with basic functionality
 }
 
 # Global variables
@@ -20,6 +28,10 @@ $script:BackupsPath = Join-Path $script:ResetRoot "backups"
 $script:ConfigPath = Join-Path $script:ResetRoot "config.ini"
 $script:GUIConfig = $null
 $script:CurrentTheme = "Light"
+$script:CachedScripts = $null
+$script:LastScanTime = $null
+$script:SelectedScript = $null
+$script:IsProcessing = $false
 
 # Load GUI configuration
 try {
@@ -72,17 +84,40 @@ if ($script:GUIConfig -and $script:GUIConfig.Categories -and $script:GUIConfig.C
     $script:ScriptCategories = $newCategories
 }
 
-# Function to scan for available scripts
+# Function to scan for available scripts with caching and performance optimization
 function Get-AvailableScripts {
+    param(
+        [switch]$Force,
+        [switch]$ShowProgress
+    )
+    
+    # Use cached results if available and not forcing refresh
+    if (-not $Force -and $script:CachedScripts -and $script:LastScanTime -and 
+        ((Get-Date) - $script:LastScanTime).TotalMinutes -lt 5) {
+        return $script:CachedScripts
+    }
+    
     $scripts = @{}
     
     if (Test-Path $script:ScriptsPath) {
-        $scriptFiles = Get-ChildItem -Path $script:ScriptsPath -Filter "reset-*.bat"
+        $scriptFiles = Get-ChildItem -Path $script:ScriptsPath -Filter "reset-*.bat" -ErrorAction SilentlyContinue
         
+        if ($ShowProgress -and $scriptFiles.Count -gt 0) {
+            Write-Progress -Activity "Scanning Scripts" -Status "Found $($scriptFiles.Count) script files" -PercentComplete 0
+        }
+        
+        $processedCount = 0
         foreach ($file in $scriptFiles) {
+            if ($ShowProgress) {
+                $percentComplete = [math]::Round(($processedCount / $scriptFiles.Count) * 100)
+                Write-Progress -Activity "Scanning Scripts" -Status "Processing: $($file.Name)" -PercentComplete $percentComplete
+            }
+            
             $scriptName = $file.BaseName
             $displayName = ($scriptName -replace "reset-", "" -replace "-", " ")
             $displayName = (Get-Culture).TextInfo.ToTitleCase($displayName.ToLower())
+            
+            $processedCount++
             
             # Get enhanced metadata if configuration module is available
             $metadata = $null
@@ -136,9 +171,21 @@ function Get-AvailableScripts {
                 RiskLevel = $riskLevel
                 RequiresRestart = $requiresRestart
                 Metadata = $metadata
+                FileSize = $file.Length
+                IsReadOnly = $file.IsReadOnly
             }
         }
+        
+        if ($ShowProgress) {
+            Write-Progress -Activity "Scanning Scripts" -Completed
+        }
+    } else {
+        Write-Warning "Scripts directory not found: $script:ScriptsPath"
     }
+    
+    # Cache the results
+    $script:CachedScripts = $scripts
+    $script:LastScanTime = Get-Date
     
     return $scripts
 }
@@ -155,26 +202,109 @@ function Get-ScriptCategory {
     return "Other"
 }
 
-# Function to create the main form
+# Function to filter tree view based on search text
+function Filter-TreeView {
+    param(
+        [string]$SearchText,
+        [System.Windows.Forms.TreeView]$TreeView
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($SearchText)) {
+        # Show all nodes
+        foreach ($categoryNode in $TreeView.Nodes) {
+            $categoryNode.Collapse()
+            foreach ($scriptNode in $categoryNode.Nodes) {
+                $scriptNode.BackColor = [System.Drawing.Color]::White
+                $scriptNode.ForeColor = [System.Drawing.Color]::Black
+            }
+            $categoryNode.Expand()
+        }
+        return
+    }
+    
+    # Filter nodes based on search text
+    foreach ($categoryNode in $TreeView.Nodes) {
+        $hasVisibleChildren = $false
+        foreach ($scriptNode in $categoryNode.Nodes) {
+            if ($scriptNode.Text -like "*$SearchText*" -or 
+                $scriptNode.Tag.Info.Description -like "*$SearchText*") {
+                $scriptNode.BackColor = [System.Drawing.Color]::Yellow
+                $scriptNode.ForeColor = [System.Drawing.Color]::Black
+                $hasVisibleChildren = $true
+            } else {
+                $scriptNode.BackColor = [System.Drawing.Color]::LightGray
+                $scriptNode.ForeColor = [System.Drawing.Color]::Gray
+            }
+        }
+        
+        if ($hasVisibleChildren) {
+            $categoryNode.Expand()
+        } else {
+            $categoryNode.Collapse()
+        }
+    }
+}
+
+# Function to refresh scripts with UI updates
+function Refresh-Scripts {
+    if ($script:IsProcessing) {
+        return
+    }
+    
+    $script:IsProcessing = $true
+    try {
+        Add-LogEntry "Refreshing script list..." "INFO"
+        $script:StatusLabel.Text = "Refreshing..."
+        
+        # Clear cached data
+        $script:CachedScripts = $null
+        $script:LastScanTime = $null
+        
+        # Rescan scripts
+        $script:AvailableScripts = Get-AvailableScripts -Force -ShowProgress
+        
+        # Update script count
+        $script:ScriptCountLabel.Text = "Scripts: $($script:AvailableScripts.Count)"
+        
+        # Refresh tree view (this would need to be called from the main event handler)
+        Add-LogEntry "Script list refreshed - Found $($script:AvailableScripts.Count) scripts" "SUCCESS"
+        $script:StatusLabel.Text = "Ready"
+    }
+    catch {
+        Add-LogEntry "Error refreshing scripts: $($_.Exception.Message)" "ERROR"
+        $script:StatusLabel.Text = "Error"
+    }
+    finally {
+        $script:IsProcessing = $false
+    }
+}
+
+# Function to create the main form with enhanced features
 function New-MainForm {
-    # Get window size from configuration
+    # Get window size from configuration with validation
     $width = 1200
     $height = 800
-    if ($script:GUIConfig.UI.WindowWidth) {
-        $width = [int]$script:GUIConfig.UI.WindowWidth
-    }
-    if ($script:GUIConfig.UI.WindowHeight) {
-        $height = [int]$script:GUIConfig.UI.WindowHeight
+    try {
+        if ($script:GUIConfig.UI.WindowWidth -and [int]$script:GUIConfig.UI.WindowWidth -ge 1000) {
+            $width = [int]$script:GUIConfig.UI.WindowWidth
+        }
+        if ($script:GUIConfig.UI.WindowHeight -and [int]$script:GUIConfig.UI.WindowHeight -ge 700) {
+            $height = [int]$script:GUIConfig.UI.WindowHeight
+        }
+    } catch {
+        Write-Warning "Invalid window size in configuration, using defaults"
     }
     
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "ReSet Toolkit - Windows Settings Reset GUI v2.0"
+    $form.Text = "ReSet Toolkit - Windows Settings Reset GUI v2.1 Enhanced"
     $form.Size = New-Object System.Drawing.Size($width, $height)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "Sizable"
     $form.MaximizeBox = $true
     $form.MinimumSize = New-Object System.Drawing.Size(1000, 700)
     $form.Icon = [System.Drawing.SystemIcons]::WinLogo
+    $form.KeyPreview = $true  # Enable keyboard shortcuts
+    $form.DoubleBuffered = $true  # Reduce flicker
     
     # Set colors and styling based on theme
     $form.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
@@ -189,6 +319,34 @@ function New-MainForm {
     catch {
         Write-Warning "Could not apply theme: $($_.Exception.Message)"
     }
+    
+    # Add keyboard shortcuts
+    $form.add_KeyDown({
+        param($sender, $e)
+        switch ($e.KeyCode) {
+            "F1" { Show-Help }
+            "F5" { Refresh-Scripts }
+            "Escape" { 
+                if (-not $script:IsProcessing) {
+                    $form.Close()
+                }
+            }
+            "F11" {
+                if ($form.WindowState -eq "Normal") {
+                    $form.WindowState = "Maximized"
+                } else {
+                    $form.WindowState = "Normal"
+                }
+            }
+        }
+        if ($e.Control) {
+            switch ($e.KeyCode) {
+                "Q" { $form.Close() }
+                "R" { Refresh-Scripts }
+                "H" { Show-Help }
+            }
+        }
+    })
     
     return $form
 }
@@ -218,16 +376,34 @@ function New-HeaderPanel {
     $subtitleLabel.Location = New-Object System.Drawing.Point(20, 45)
     $subtitleLabel.AutoSize = $true
     
-    # Status label
+    # Status label with enhanced information
     $script:StatusLabel = New-Object System.Windows.Forms.Label
     $script:StatusLabel.Text = "Ready"
     $script:StatusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $script:StatusLabel.ForeColor = [System.Drawing.Color]::White
-    $script:StatusLabel.Location = New-Object System.Drawing.Point(950, 25)
+    $script:StatusLabel.Location = New-Object System.Drawing.Point(750, 15)
     $script:StatusLabel.Size = New-Object System.Drawing.Size(200, 20)
     $script:StatusLabel.TextAlign = "MiddleRight"
     
-    $headerPanel.Controls.AddRange(@($titleLabel, $subtitleLabel, $script:StatusLabel))
+    # Script count label
+    $script:ScriptCountLabel = New-Object System.Windows.Forms.Label
+    $script:ScriptCountLabel.Text = "Scripts: 0"
+    $script:ScriptCountLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+    $script:ScriptCountLabel.ForeColor = [System.Drawing.Color]::FromArgb(200, 200, 200)
+    $script:ScriptCountLabel.Location = New-Object System.Drawing.Point(750, 35)
+    $script:ScriptCountLabel.Size = New-Object System.Drawing.Size(100, 15)
+    $script:ScriptCountLabel.TextAlign = "MiddleRight"
+    
+    # Version label
+    $script:VersionLabel = New-Object System.Windows.Forms.Label
+    $script:VersionLabel.Text = "v2.1 Enhanced"
+    $script:VersionLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+    $script:VersionLabel.ForeColor = [System.Drawing.Color]::FromArgb(200, 200, 200)
+    $script:VersionLabel.Location = New-Object System.Drawing.Point(750, 50)
+    $script:VersionLabel.Size = New-Object System.Drawing.Size(100, 15)
+    $script:VersionLabel.TextAlign = "MiddleRight"
+    
+    $headerPanel.Controls.AddRange(@($titleLabel, $subtitleLabel, $script:StatusLabel, $script:ScriptCountLabel, $script:VersionLabel))
     $form.Controls.Add($headerPanel)
     
     return $headerPanel
@@ -248,8 +424,33 @@ function New-ScriptTreeView {
     $treeView.ShowPlusMinus = $true
     $treeView.ShowRootLines = $true
     
-    # Populate tree with scripts
-    $script:AvailableScripts = Get-AvailableScripts
+    # Add search box above tree view
+    $searchLabel = New-Object System.Windows.Forms.Label
+    $searchLabel.Text = "Search:"
+    $searchLabel.Location = New-Object System.Drawing.Point(20, 85)
+    $searchLabel.Size = New-Object System.Drawing.Size(50, 20)
+    $searchLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    
+    $script:SearchBox = New-Object System.Windows.Forms.TextBox
+    $script:SearchBox.Location = New-Object System.Drawing.Point(75, 85)
+    $script:SearchBox.Size = New-Object System.Drawing.Size(200, 20)
+    $script:SearchBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    
+    # Clear search button
+    $script:ClearSearchButton = New-Object System.Windows.Forms.Button
+    $script:ClearSearchButton.Text = "×"
+    $script:ClearSearchButton.Size = New-Object System.Drawing.Size(20, 20)
+    $script:ClearSearchButton.Location = New-Object System.Drawing.Point(280, 85)
+    $script:ClearSearchButton.FlatStyle = "Flat"
+    $script:ClearSearchButton.BackColor = [System.Drawing.Color]::LightGray
+    
+    $form.Controls.AddRange(@($searchLabel, $script:SearchBox, $script:ClearSearchButton))
+    
+    # Populate tree with scripts using enhanced function
+    $script:AvailableScripts = Get-AvailableScripts -ShowProgress
+    
+    # Update script count
+    $script:ScriptCountLabel.Text = "Scripts: $($script:AvailableScripts.Count)"
     
     foreach ($category in $script:ScriptCategories.Keys) {
         $categoryNode = New-Object System.Windows.Forms.TreeNode($category)
@@ -277,6 +478,17 @@ function New-ScriptTreeView {
     
     # Expand all categories
     $treeView.ExpandAll()
+    
+    # Add search functionality
+    $script:SearchBox.add_TextChanged({
+        Filter-TreeView -SearchText $script:SearchBox.Text -TreeView $treeView
+    })
+    
+    $script:ClearSearchButton.add_Click({
+        $script:SearchBox.Text = ""
+        $treeView.CollapseAll()
+        $treeView.ExpandAll()
+    })
     
     $form.Controls.Add($treeView)
     return $treeView
@@ -696,6 +908,26 @@ function New-ControlButtons {
     $script:RefreshButton.FlatStyle = "Flat"
     $script:RefreshButton.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     
+    # Export button
+    $script:ExportButton = New-Object System.Windows.Forms.Button
+    $script:ExportButton.Text = "📊 Export Report"
+    $script:ExportButton.Size = New-Object System.Drawing.Size(120, 35)
+    $script:ExportButton.Location = New-Object System.Drawing.Point(810, 515)
+    $script:ExportButton.BackColor = [System.Drawing.Color]::FromArgb(111, 66, 193)
+    $script:ExportButton.ForeColor = [System.Drawing.Color]::White
+    $script:ExportButton.FlatStyle = "Flat"
+    $script:ExportButton.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    
+    # Statistics button
+    $script:StatsButton = New-Object System.Windows.Forms.Button
+    $script:StatsButton.Text = "📈 Statistics"
+    $script:StatsButton.Size = New-Object System.Drawing.Size(100, 35)
+    $script:StatsButton.Location = New-Object System.Drawing.Point(940, 515)
+    $script:StatsButton.BackColor = [System.Drawing.Color]::FromArgb(255, 140, 0)
+    $script:StatsButton.ForeColor = [System.Drawing.Color]::White
+    $script:StatsButton.FlatStyle = "Flat"
+    $script:StatsButton.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+    
     # Help button
     $script:HelpButton = New-Object System.Windows.Forms.Button
     $script:HelpButton.Text = "❓ Help"
@@ -718,6 +950,8 @@ function New-ControlButtons {
     
     $form.Controls.AddRange(@(
         $script:RefreshButton,
+        $script:ExportButton,
+        $script:StatsButton,
         $script:HelpButton,
         $script:ExitButton
     ))
@@ -928,13 +1162,43 @@ function Register-EventHandlers {
     
     # Control buttons
     $script:RefreshButton.add_Click({
-        Add-LogEntry "Refreshing script list..." "INFO"
-        $script:AvailableScripts = Get-AvailableScripts
+        Refresh-Scripts
         # Refresh tree view
         $treeView.Nodes.Clear()
-        $newTreeView = New-ScriptTreeView $form
-        Add-LogEntry "Script list refreshed" "SUCCESS"
+        
+        # Repopulate tree with updated scripts
+        foreach ($category in $script:ScriptCategories.Keys) {
+            $categoryNode = New-Object System.Windows.Forms.TreeNode($category)
+            $categoryNode.Tag = @{ Type = "Category"; Name = $category }
+            $categoryNode.NodeFont = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+            
+            $scriptsInCategory = $script:ScriptCategories[$category]
+            foreach ($scriptName in $scriptsInCategory) {
+                if ($script:AvailableScripts.ContainsKey($scriptName)) {
+                    $scriptInfo = $script:AvailableScripts[$scriptName]
+                    $scriptNode = New-Object System.Windows.Forms.TreeNode($scriptInfo.DisplayName)
+                    $scriptNode.Tag = @{ 
+                        Type = "Script"
+                        Name = $scriptName
+                        Info = $scriptInfo
+                    }
+                    $categoryNode.Nodes.Add($scriptNode)
+                }
+            }
+            
+            if ($categoryNode.Nodes.Count -gt 0) {
+                $treeView.Nodes.Add($categoryNode)
+            }
+        }
+        
+        $treeView.ExpandAll()
     })
+    
+    # Export button
+    $script:ExportButton.add_Click({ Export-ScriptReport })
+    
+    # Statistics button
+    $script:StatsButton.add_Click({ Show-Statistics })
     
     $script:HelpButton.add_Click({ Show-Help })
     $script:ExitButton.add_Click({ $form.Close() })
@@ -1367,6 +1631,134 @@ function Show-LogViewer {
     
     $logForm.Controls.Add($logViewer)
     $logForm.ShowDialog()
+}
+
+# Function to export script report
+function Export-ScriptReport {
+    try {
+        $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDialog.Filter = "CSV files (*.csv)|*.csv|Text files (*.txt)|*.txt|HTML files (*.html)|*.html"
+        $saveDialog.DefaultExt = "csv"
+        $saveDialog.FileName = "ReSet_Scripts_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        
+        if ($saveDialog.ShowDialog() -eq "OK") {
+            $reportData = @()
+            
+            foreach ($scriptName in $script:AvailableScripts.Keys) {
+                $scriptInfo = $script:AvailableScripts[$scriptName]
+                $reportData += [PSCustomObject]@{
+                    Name = $scriptInfo.DisplayName
+                    Category = $scriptInfo.Category
+                    RiskLevel = $scriptInfo.RiskLevel
+                    RequiresRestart = $scriptInfo.RequiresRestart
+                    LastModified = $scriptInfo.LastModified
+                    FileSize = $scriptInfo.FileSize
+                    Description = $scriptInfo.Description
+                    FilePath = $scriptInfo.FilePath
+                }
+            }
+            
+            $extension = [System.IO.Path]::GetExtension($saveDialog.FileName)
+            switch ($extension) {
+                ".csv" {
+                    $reportData | Export-Csv -Path $saveDialog.FileName -NoTypeInformation
+                }
+                ".html" {
+                    $html = $reportData | ConvertTo-Html -Title "ReSet Toolkit Scripts Report" -PreContent "<h1>ReSet Toolkit Scripts Report</h1><p>Generated: $(Get-Date)</p>"
+                    $html | Out-File -FilePath $saveDialog.FileName
+                }
+                default {
+                    $reportData | Format-Table -AutoSize | Out-File -FilePath $saveDialog.FileName
+                }
+            }
+            
+            Add-LogEntry "Report exported to: $($saveDialog.FileName)" "SUCCESS"
+            [System.Windows.Forms.MessageBox]::Show("Report exported successfully to:`n$($saveDialog.FileName)", "Export Complete", "OK", "Information")
+        }
+    }
+    catch {
+        Add-LogEntry "Error exporting report: $($_.Exception.Message)" "ERROR"
+        [System.Windows.Forms.MessageBox]::Show("Error exporting report: $($_.Exception.Message)", "Export Error", "OK", "Error")
+    }
+}
+
+# Function to show statistics
+function Show-Statistics {
+    $statsForm = New-Object System.Windows.Forms.Form
+    $statsForm.Text = "Script Statistics"
+    $statsForm.Size = New-Object System.Drawing.Size(500, 400)
+    $statsForm.StartPosition = "CenterParent"
+    $statsForm.FormBorderStyle = "FixedDialog"
+    $statsForm.MaximizeBox = $false
+    
+    $statsText = New-Object System.Windows.Forms.RichTextBox
+    $statsText.Size = New-Object System.Drawing.Size(460, 350)
+    $statsText.Location = New-Object System.Drawing.Point(20, 20)
+    $statsText.ReadOnly = $true
+    $statsText.Font = New-Object System.Drawing.Font("Consolas", 9)
+    
+    # Calculate statistics
+    $totalScripts = $script:AvailableScripts.Count
+    $categoryStats = @{}
+    $riskStats = @{ Low = 0; Medium = 0; High = 0 }
+    $restartRequired = 0
+    $totalSize = 0
+    
+    foreach ($scriptInfo in $script:AvailableScripts.Values) {
+        # Category stats
+        if ($categoryStats.ContainsKey($scriptInfo.Category)) {
+            $categoryStats[$scriptInfo.Category]++
+        } else {
+            $categoryStats[$scriptInfo.Category] = 1
+        }
+        
+        # Risk stats
+        if ($riskStats.ContainsKey($scriptInfo.RiskLevel)) {
+            $riskStats[$scriptInfo.RiskLevel]++
+        }
+        
+        # Restart stats
+        if ($scriptInfo.RequiresRestart) {
+            $restartRequired++
+        }
+        
+        # Size stats
+        if ($scriptInfo.FileSize) {
+            $totalSize += $scriptInfo.FileSize
+        }
+    }
+    
+    # Generate statistics text
+    $statsContent = "RESET TOOLKIT SCRIPT STATISTICS`n"
+    $statsContent += "=" * 40 + "`n`n"
+    $statsContent += "OVERVIEW:`n"
+    $statsContent += "Total Scripts: $totalScripts`n"
+    $statsContent += "Total Size: $([math]::Round($totalSize / 1KB, 2)) KB`n"
+    $statsContent += "Scripts Requiring Restart: $restartRequired`n`n"
+    
+    $statsContent += "RISK LEVEL DISTRIBUTION:`n"
+    foreach ($risk in @("Low", "Medium", "High")) {
+        $count = $riskStats[$risk]
+        $percentage = if ($totalScripts -gt 0) { [math]::Round(($count / $totalScripts) * 100, 1) } else { 0 }
+        $statsContent += "$risk Risk: $count ($percentage%)`n"
+    }
+    
+    $statsContent += "`nCATEGORY DISTRIBUTION:`n"
+    foreach ($category in $categoryStats.Keys | Sort-Object) {
+        $count = $categoryStats[$category]
+        $percentage = if ($totalScripts -gt 0) { [math]::Round(($count / $totalScripts) * 100, 1) } else { 0 }
+        $statsContent += "$category`: $count ($percentage%)`n"
+    }
+    
+    $statsContent += "`nSYSTEM INFORMATION:`n"
+    $statsContent += "PowerShell Version: $($PSVersionTable.PSVersion)`n"
+    $statsContent += "OS Version: $([System.Environment]::OSVersion.VersionString)`n"
+    $statsContent += "GUI Version: 2.1 Enhanced`n"
+    $statsContent += "Last Scan: $($script:LastScanTime)`n"
+    
+    $statsText.Text = $statsContent
+    $statsForm.Controls.Add($statsText)
+    $statsForm.ShowDialog()
 }
 
 # Main application entry point
