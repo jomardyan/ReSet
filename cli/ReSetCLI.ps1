@@ -183,7 +183,7 @@ function Get-AvailableScripts {
     $scripts = @{}
     if (-not (Test-Path $ScriptsPath)) { return $scripts }
 
-    $files = Get-ChildItem -Path $ScriptsPath -Filter 'reset-*.bat' -ErrorAction SilentlyContinue
+    $files = Get-ChildItem -Path $ScriptsPath -Filter 'reset-*.ps1' -ErrorAction SilentlyContinue
     $count = $files.Count
     $idx = 0
 
@@ -601,7 +601,12 @@ function Invoke-SingleScript {
     if (-not (Confirm-Action -Message $msg -DefaultNo -RiskLevel $Script.RiskLevel)) { return }
     Write-Info "Starting script..."
     try {
-        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$($Script.FilePath)`"" -WindowStyle Hidden -PassThru
+        # Check if it's a PowerShell script
+        if ($Script.FilePath -like "*.ps1") {
+            $p = Start-Process -FilePath 'powershell.exe' -ArgumentList "-ExecutionPolicy Bypass -File `"$($Script.FilePath)`"" -WindowStyle Hidden -PassThru
+        } else {
+            $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$($Script.FilePath)`"" -WindowStyle Hidden -PassThru
+        }
         $p.WaitForExit()
         if ($p.ExitCode -eq 0){ Write-Success 'Completed successfully' } else { Write-ErrorMsg ("Failed with exit code {0}" -f $p.ExitCode) }
     } catch { Write-ErrorMsg $_.Exception.Message }
@@ -630,7 +635,12 @@ function Run-SingleScript {
     if (-not (Confirm-Action -Message $msg -DefaultNo)) { return }
     Write-Info "Starting script..."
     try {
-        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$($Script.FilePath)`"" -WindowStyle Hidden -PassThru
+        # Check if it's a PowerShell script
+        if ($Script.FilePath -like "*.ps1") {
+            $p = Start-Process -FilePath 'powershell.exe' -ArgumentList "-ExecutionPolicy Bypass -File `"$($Script.FilePath)`"" -WindowStyle Hidden -PassThru
+        } else {
+            $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$($Script.FilePath)`"" -WindowStyle Hidden -PassThru
+        }
         $p.WaitForExit()
         if ($p.ExitCode -eq 0){ Write-Success 'Completed successfully' } else { Write-ErrorMsg ("Failed with exit code {0}" -f $p.ExitCode) }
     } catch { Write-ErrorMsg $_.Exception.Message }

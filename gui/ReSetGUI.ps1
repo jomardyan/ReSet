@@ -100,7 +100,7 @@ function Get-AvailableScripts {
     $scripts = @{}
     
     if (Test-Path $script:ScriptsPath) {
-        $scriptFiles = Get-ChildItem -Path $script:ScriptsPath -Filter "reset-*.bat" -ErrorAction SilentlyContinue
+        $scriptFiles = Get-ChildItem -Path $script:ScriptsPath -Filter "reset-*.ps1" -ErrorAction SilentlyContinue
         
         if ($ShowProgress -and $scriptFiles.Count -gt 0) {
             Write-Progress -Activity "Scanning Scripts" -Status "Found $($scriptFiles.Count) script files" -PercentComplete 0

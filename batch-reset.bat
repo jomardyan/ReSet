@@ -187,61 +187,61 @@ echo Running %CATEGORY% category reset scripts...
 echo.
 
 if /i "%CATEGORY%"=="language" (
-    call :run_single_script "reset-language-settings.bat"
-    call :run_single_script "reset-datetime.bat"
+    call :run_single_script "reset-language-settings.ps1"
+    call :run_single_script "reset-datetime.ps1"
 )
 
 if /i "%CATEGORY%"=="display" (
-    call :run_single_script "reset-display.bat"
-    call :run_single_script "reset-fonts.bat"
+    call :run_single_script "reset-display.ps1"
+    call :run_single_script "reset-fonts.ps1"
 )
 
 if /i "%CATEGORY%"=="audio" (
-    call :run_single_script "reset-audio.bat"
+    call :run_single_script "reset-audio.ps1"
 )
 
 if /i "%CATEGORY%"=="network" (
-    call :run_single_script "reset-network.bat"
-    call :run_single_script "reset-windows-update.bat"
+    call :run_single_script "reset-network.ps1"
+    call :run_single_script "reset-windows-update.ps1"
 )
 
 if /i "%CATEGORY%"=="security" (
-    call :run_single_script "reset-uac.bat"
-    call :run_single_script "reset-privacy.bat"
-    call :run_single_script "reset-defender.bat"
+    call :run_single_script "reset-uac.ps1"
+    call :run_single_script "reset-privacy.ps1"
+    call :run_single_script "reset-defender.ps1"
 )
 
 if /i "%CATEGORY%"=="search" (
-    call :run_single_script "reset-search.bat"
+    call :run_single_script "reset-search.ps1"
 )
 
 if /i "%CATEGORY%"=="interface" (
-    call :run_single_script "reset-startmenu.bat"
-    call :run_single_script "reset-shell.bat"
+    call :run_single_script "reset-startmenu.ps1"
+    call :run_single_script "reset-shell.ps1"
 )
 
 if /i "%CATEGORY%"=="files" (
-    call :run_single_script "reset-file-associations.bat"
+    call :run_single_script "reset-file-associations.ps1"
 )
 
 if /i "%CATEGORY%"=="performance" (
-    call :run_single_script "reset-power.bat"
-    call :run_single_script "reset-performance.bat"
+    call :run_single_script "reset-power.ps1"
+    call :run_single_script "reset-performance.ps1"
 )
 
 if /i "%CATEGORY%"=="apps" (
-    call :run_single_script "reset-browser.bat"
-    call :run_single_script "reset-store.bat"
+    call :run_single_script "reset-browser.ps1"
+    call :run_single_script "reset-store.ps1"
 )
 
 if /i "%CATEGORY%"=="input" (
-    call :run_single_script "reset-input-devices.bat"
+    call :run_single_script "reset-input-devices.ps1"
 )
 
 if /i "%CATEGORY%"=="system" (
-    call :run_single_script "reset-features.bat"
-    call :run_single_script "reset-environment.bat"
-    call :run_single_script "reset-registry.bat"
+    call :run_single_script "reset-features.ps1"
+    call :run_single_script "reset-environment.ps1"
+    call :run_single_script "reset-registry.ps1"
 )
 
 if /i "%CATEGORY%"=="all" (
@@ -255,7 +255,7 @@ set "SCRIPTS=%~1"
 
 for %%i in (%SCRIPTS%) do (
     set "SCRIPT=%%i"
-    call :run_single_script "reset-!SCRIPT!.bat"
+    call :run_single_script "reset-!SCRIPT!.ps1"
 )
 goto :eof
 
@@ -275,10 +275,22 @@ echo ----------------------------------------
 echo Running: %SCRIPT_NAME%
 echo ----------------------------------------
 
-if /i "%SILENT_MODE%"=="true" (
-    call "%SCRIPT_PATH%" --silent
+:: Check if it's a PowerShell script
+echo "%SCRIPT_NAME%" | findstr /i "\.ps1$" >nul
+if %errorlevel% == 0 (
+    :: Run PowerShell script
+    if /i "%SILENT_MODE%"=="true" (
+        powershell -ExecutionPolicy Bypass -File "%SCRIPT_PATH%" -Silent
+    ) else (
+        powershell -ExecutionPolicy Bypass -File "%SCRIPT_PATH%"
+    )
 ) else (
-    call "%SCRIPT_PATH%"
+    :: Run batch script (legacy support)
+    if /i "%SILENT_MODE%"=="true" (
+        call "%SCRIPT_PATH%" --silent
+    ) else (
+        call "%SCRIPT_PATH%"
+    )
 )
 
 set "SCRIPT_EXIT_CODE=%errorlevel%"
@@ -322,46 +334,46 @@ if /i not "%SILENT_MODE%"=="true" (
 )
 
 :: Language & Regional
-call :run_single_script "reset-language-settings.bat"
-call :run_single_script "reset-datetime.bat"
+call :run_single_script "reset-language-settings.ps1"
+call :run_single_script "reset-datetime.ps1"
 
 :: Display & Audio
-call :run_single_script "reset-display.bat"
-call :run_single_script "reset-audio.bat"
-call :run_single_script "reset-fonts.bat"
+call :run_single_script "reset-display.ps1"
+call :run_single_script "reset-audio.ps1"
+call :run_single_script "reset-fonts.ps1"
 
 :: Network & Connectivity
-call :run_single_script "reset-network.bat"
-call :run_single_script "reset-windows-update.bat"
+call :run_single_script "reset-network.ps1"
+call :run_single_script "reset-windows-update.ps1"
 
 :: Security & Privacy
-call :run_single_script "reset-uac.bat"
-call :run_single_script "reset-privacy.bat"
-call :run_single_script "reset-defender.bat"
+call :run_single_script "reset-uac.ps1"
+call :run_single_script "reset-privacy.ps1"
+call :run_single_script "reset-defender.ps1"
 
 :: Search & Interface
-call :run_single_script "reset-search.bat"
-call :run_single_script "reset-startmenu.bat"
-call :run_single_script "reset-shell.bat"
+call :run_single_script "reset-search.ps1"
+call :run_single_script "reset-startmenu.ps1"
+call :run_single_script "reset-shell.ps1"
 
 :: File Management
-call :run_single_script "reset-file-associations.bat"
+call :run_single_script "reset-file-associations.ps1"
 
 :: Performance & Power
-call :run_single_script "reset-power.bat"
-call :run_single_script "reset-performance.bat"
+call :run_single_script "reset-power.ps1"
+call :run_single_script "reset-performance.ps1"
 
 :: Applications & Store
-call :run_single_script "reset-browser.bat"
-call :run_single_script "reset-store.bat"
+call :run_single_script "reset-browser.ps1"
+call :run_single_script "reset-store.ps1"
 
 :: Input & Accessibility
-call :run_single_script "reset-input-devices.bat"
+call :run_single_script "reset-input-devices.ps1"
 
 :: System Components
-call :run_single_script "reset-features.bat"
-call :run_single_script "reset-environment.bat"
-call :run_single_script "reset-registry.bat"
+call :run_single_script "reset-features.ps1"
+call :run_single_script "reset-environment.ps1"
+call :run_single_script "reset-registry.ps1"
 
 echo.
 echo ==========================================
